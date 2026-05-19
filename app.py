@@ -507,7 +507,7 @@ def main():
             project_key = st.text_input(
                 "Jira project key",
                 value=st.session_state.get("jira_project_key", ""),
-                placeholder="HACK",
+                placeholder="DEMO",
                 help="Project key to file the issue under, e.g. HACK or DEMO.",
                 key="jira_project_key_input",
             ).strip()
