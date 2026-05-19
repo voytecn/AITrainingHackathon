@@ -2,206 +2,101 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>PAY-OOM-001 · Fix OOM in payment-service causing Stripe/ledger desync</title>
+<title>DB connection pool exhausted in search-api causing widespread fallback responses</title>
 <style>
   :root {
-    --bg: #f4f5f7;
-    --card: #ffffff;
-    --border: #e4e6ea;
-    --border-strong: #c1c7d0;
-    --text: #172b4d;
-    --muted: #5e6c84;
-    --code-bg: #f7f8fa;
-    --pill-bg: #ebecf0;
-    --pill-text: #42526e;
-    --p0-bg: #ffe5e5;
-    --p0-text: #b3261e;
-    --p0-border: #f5a3a3;
+    --bg: #f4f5f7; --card: #ffffff; --border: #e4e6ea; --border-strong: #c1c7d0;
+    --text: #172b4d; --muted: #5e6c84; --code-bg: #f7f8fa;
+    --pill-bg: #ebecf0; --pill-text: #42526e;
+    --sev-bg: #fff1e0; --sev-text: #a45200; --sev-border: #f5c98a;
   }
   * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    padding: 40px 20px;
-    background: var(--bg);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    color: var(--text);
-    line-height: 1.5;
-  }
-  .card {
-    max-width: 820px;
-    margin: 0 auto;
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    box-shadow: 0 1px 2px rgba(9, 30, 66, 0.05);
-    padding: 28px 32px 24px;
-  }
-  .header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-    margin-bottom: 18px;
-  }
-  .title-block .key {
-    font-size: 12px;
-    color: var(--muted);
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    margin-bottom: 6px;
-  }
-  h1 {
-    margin: 0;
-    font-size: 22px;
-    font-weight: 600;
-    line-height: 1.3;
-  }
-  .severity-badge {
-    flex-shrink: 0;
-    padding: 5px 12px;
-    border-radius: 999px;
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-    border: 1px solid var(--p0-border);
-    background: var(--p0-bg);
-    color: var(--p0-text);
-  }
-  .meta {
-    display: grid;
-    grid-template-columns: 120px 1fr;
-    row-gap: 10px;
-    column-gap: 16px;
-    padding: 16px 0;
-    border-top: 1px solid var(--border);
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 22px;
-    font-size: 14px;
-  }
-  .meta dt {
-    color: var(--muted);
-    font-weight: 500;
-  }
-  .meta dd {
-    margin: 0;
-    color: var(--text);
-  }
-  .pill {
-    display: inline-block;
-    padding: 2px 10px;
-    margin: 2px 4px 2px 0;
-    background: var(--pill-bg);
-    color: var(--pill-text);
-    border-radius: 3px;
-    font-size: 12px;
-    font-weight: 500;
-  }
-  h2 {
-    font-size: 14px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--muted);
-    margin: 22px 0 10px;
-  }
+  body { margin: 0; padding: 24px 16px; background: var(--bg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    color: var(--text); line-height: 1.5; }
+  .card { max-width: 820px; margin: 0 auto; background: var(--card);
+    border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 1px 2px rgba(9, 30, 66, 0.05); padding: 28px 32px 24px; }
+  .header { display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 16px; margin-bottom: 18px; }
+  .title-block .key { font-size: 12px; color: var(--muted); font-weight: 600;
+    letter-spacing: 0.04em; text-transform: uppercase; margin-bottom: 6px; }
+  h1 { margin: 0; font-size: 22px; font-weight: 600; line-height: 1.3; }
+  .severity-badge { flex-shrink: 0; padding: 5px 12px; border-radius: 999px;
+    font-size: 12px; font-weight: 700; letter-spacing: 0.05em;
+    background: var(--sev-bg); color: var(--sev-text); border: 1px solid var(--sev-border); }
+  .meta { display: grid; grid-template-columns: 120px 1fr; row-gap: 10px;
+    column-gap: 16px; padding: 16px 0; border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border); margin-bottom: 22px; font-size: 14px; }
+  .meta dt { color: var(--muted); font-weight: 500; }
+  .meta dd { margin: 0; color: var(--text); }
+  .pill { display: inline-block; padding: 2px 10px; margin: 2px 4px 2px 0;
+    background: var(--pill-bg); color: var(--pill-text); border-radius: 3px;
+    font-size: 12px; font-weight: 500; }
+  h2 { font-size: 14px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.05em; color: var(--muted); margin: 22px 0 10px; }
   p, ol { margin: 0 0 12px; font-size: 15px; }
   ol { padding-left: 22px; }
   ol li { margin-bottom: 6px; }
-  code, .mono {
-    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-    font-size: 13px;
-  }
-  .error-block {
-    position: relative;
-    background: var(--code-bg);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 12px 44px 12px 14px;
-    color: #c00f0c;
-    white-space: pre-wrap;
-    word-break: break-all;
-  }
-  .copy-btn {
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    background: transparent;
-    border: 1px solid var(--border-strong);
-    border-radius: 3px;
-    padding: 4px 6px;
-    cursor: pointer;
-    color: var(--muted);
-    font-size: 11px;
-    line-height: 1;
-  }
+  code, .mono { font-family: "SFMono-Regular", Consolas, Menlo, monospace; font-size: 13px; }
+  .error-block { position: relative; background: var(--code-bg);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 12px 56px 12px 14px; color: #c00f0c;
+    white-space: pre-wrap; word-break: break-all; }
+  .copy-btn { position: absolute; top: 8px; right: 8px; background: transparent;
+    border: 1px solid var(--border-strong); border-radius: 3px; padding: 4px 8px;
+    cursor: pointer; color: var(--muted); font-size: 11px; line-height: 1; }
   .copy-btn:hover { background: #fff; color: var(--text); }
-  .footer {
-    margin-top: 28px;
-    padding-top: 14px;
-    border-top: 1px solid var(--border);
-    font-size: 12px;
-    color: var(--muted);
-    text-align: right;
-  }
-  strong { color: var(--text); }
+  .footer { margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--border);
+    font-size: 12px; color: var(--muted); text-align: right; }
 </style>
 </head>
 <body>
   <article class="card">
     <header class="header">
       <div class="title-block">
-        <div class="key">Ticket · payment-service</div>
-        <h1>Fix OOM in payment-service causing Stripe/ledger desync</h1>
+        <div class="key">Ticket &middot; search-api</div>
+        <h1>DB connection pool exhausted in search-api causing widespread fallback responses</h1>
       </div>
-      <span class="severity-badge" title="Production down / data integrity at risk">P0</span>
+      <span class="severity-badge">P1</span>
     </header>
 
     <dl class="meta">
       <dt>Component</dt>
-      <dd><span class="pill">payment-service</span></dd>
-
+      <dd><span class="pill">search-api</span></dd>
       <dt>Assignee</dt>
-      <dd><span class="pill">payments-team</span></dd>
-
+      <dd><span class="pill">search-team</span></dd>
       <dt>Labels</dt>
       <dd>
-        <span class="pill">incident</span>
-        <span class="pill">production</span>
-        <span class="pill">payments</span>
-        <span class="pill">memory-leak</span>
-        <span class="pill">data-integrity</span>
-        <span class="pill">needs-rollback</span>
+        <span class="pill">database</span>
+        <span class="pill">connection-pool</span>
+        <span class="pill">hikaricp</span>
+        <span class="pill">search-api</span>
+        <span class="pill">degraded-service</span>
+        <span class="pill">stale-cache</span>
       </dd>
     </dl>
 
     <h2>Description</h2>
-    <p>
-      Active production incident: <code>PaymentBatch.aggregate</code> is OOM-ing under load
-      (heap at 87% just before crash), causing charges to succeed at Stripe but never commit
-      to the local ledger. User <code>u_4421</code> was charged <strong>$129.99</strong> with
-      no local transaction record &mdash; flagged for <strong>MANUAL RECONCILIATION</strong>.
-    </p>
-    <p>
-      Pattern has recurred <strong>47 times in the last 30 minutes</strong>, so every
-      occurrence is producing a new payment/ledger mismatch. Financial and customer-trust risk
-      compounds with each minute the service stays up.
-    </p>
+    <p>The `search-api` service is experiencing connection pool exhaustion against its database. HikariCP is throwing `PoolInitializationException: Connection timeout after 10000ms` after waiting the full 10s for a free connection.</p>
+    <p>Pool state at time of incident: `active=20 idle=0 waiting=14` — the pool is fully saturated with 14 additional requests queued. In the last 5 minutes, 234 connection-timeout errors have occurred, and the service is serving stale (6h old) cached fallback results to users.</p>
+    <p>While the fallback prevents user-facing 5xx errors (requests still return 200), search results are stale and degraded. Root cause is likely one of: (1) a slow/long-running query holding connections, (2) traffic spike exceeding pool capacity, (3) a connection leak in `ProductRepository.findByQuery`, or (4) downstream database performance degradation.</p>
+    <p>First stack frame: `com.acme.search.repo.ProductRepository.findByQuery(ProductRepository.java:67)` called from `SearchService.search(SearchService.java:42)`.</p>
 
     <h2>Steps to Reproduce</h2>
     <ol>
-      <li>Client calls <code>POST /charge</code> (<code>PaymentController.charge:54</code>) &mdash; e.g. <code>req_id=7f3a9b</code>, <code>user_id=u_4421</code>, amount <code>129.99 USD</code>.</li>
-      <li><code>PaymentService.handleCharge</code> invokes the Stripe gateway &mdash; charge succeeds at Stripe.</li>
-      <li><code>PaymentBatch.aggregate</code> (<code>PaymentBatch.java:142</code>) attempts to build the batch &mdash; heap climbs past 87%.</li>
-      <li>JVM throws <code>java.lang.OutOfMemoryError</code> before the local transaction is committed.</li>
-      <li>Service returns <code>500</code> to client; Stripe charge stands, local ledger has no record.</li>
-      <li>Reconciliation flag fires: <em>&ldquo;charged on stripe but local txn missing&rdquo;</em>.</li>
+      <li>User u_8821 issued GET /api/search?q=running+shoes (req_id=a1b2c3) at 2026-05-19T09:14:22Z.</li>
+      <li>Request acquired a DB connection from the Hikari pool (12/20 in use at that moment).</li>
+      <li>10 seconds later, the connection attempt for the query timed out with HikariPool PoolInitializationException.</li>
+      <li>Pool state immediately after: active=20, idle=0, waiting=14 — fully saturated.</li>
+      <li>Service fell back to stale cached results (6h old) and returned HTTP 200.</li>
+      <li>Over the following 5 minutes, 234 similar connection timeouts and fallback responses were observed.</li>
     </ol>
 
     <h2>Error Signature</h2>
     <div class="error-block">
       <button class="copy-btn" onclick="navigator.clipboard.writeText(this.nextElementSibling.innerText); this.textContent='copied'; setTimeout(()=>this.textContent='copy', 1200);">copy</button>
-      <span class="mono">java.lang.OutOfMemoryError: Java heap space at com.acme.payments.processor.PaymentBatch.aggregate(PaymentBatch.java:142)</span>
+      <span class="mono">com.zaxxer.hikari.pool.HikariPool$PoolInitializationException: Connection timeout after 10000ms</span>
     </div>
 
     <div class="footer">Generated from logs by Claude</div>

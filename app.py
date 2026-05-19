@@ -1,5 +1,8 @@
 import html
+import json
 import os
+import re
+import subprocess
 from typing import Literal
 
 import anthropic
@@ -63,6 +66,52 @@ def analyze_logs(logs: str) -> JiraTicket:
         output_format=JiraTicket,
     )
     return response.parsed_output
+
+
+CLI_SCHEMA_INSTRUCTIONS = """Respond with ONLY a single JSON object (no markdown fences, no preamble, no commentary) with these exact fields:
+- title: string, under 80 chars, action-oriented
+- severity: one of "P0", "P1", "P2", "P3"
+- component: string
+- description: string (markdown allowed; use \\n\\n between paragraphs)
+- repro_steps: array of strings
+- suggested_assignee: string or null
+- labels: array of 3-6 strings (lowercase-kebab-case)
+- error_signature: string (the single most diagnostic log line)"""
+
+
+def _extract_json(text: str) -> str:
+    """Strip optional markdown fences and isolate the JSON object in CLI output."""
+    text = text.strip()
+    fence = re.match(r"^```(?:json)?\s*(.*?)\s*```\s*$", text, re.DOTALL)
+    if fence:
+        return fence.group(1).strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end > start:
+        return text[start : end + 1]
+    return text
+
+
+def analyze_logs_via_cli(logs: str) -> JiraTicket:
+    """Fallback when no API key: shell out to the Claude Code CLI, which uses the user's subscription auth."""
+    prompt = f"{SYSTEM_PROMPT}\n\n{CLI_SCHEMA_INSTRUCTIONS}\n\nAnalyze these logs:\n\n```\n{logs}\n```"
+    cli_env = {k: v for k, v in os.environ.items() if k not in {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}}
+    result = subprocess.run(
+        ["claude", "-p"],
+        input=prompt,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        encoding="utf-8",
+        env=cli_env,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"claude CLI exited {result.returncode}: {result.stderr.strip() or 'no stderr'}")
+    raw = _extract_json(result.stdout)
+    if not raw:
+        raise RuntimeError(f"claude CLI returned empty output. stderr: {result.stderr.strip()}")
+    data = json.loads(raw)
+    return JiraTicket.model_validate(data)
 
 
 SEVERITY_PALETTE = {
@@ -238,10 +287,6 @@ def main():
     st.title("🎫 Logs to Jira")
     st.caption("Paste application logs → get a structured Jira ticket.")
 
-    demo_mode = not os.getenv("ANTHROPIC_API_KEY")
-    if demo_mode:
-        st.warning("**Demo mode** — `ANTHROPIC_API_KEY` not set, so Analyze returns a canned ticket. Set the key in `.env` to call the real model.")
-
     sample_dir = "sample_logs"
     samples = {}
     if os.path.isdir(sample_dir):
@@ -266,18 +311,22 @@ def main():
     with col_output:
         st.subheader("Generated Ticket")
         if analyze:
-            if demo_mode:
-                st.info("Returning demo ticket (no API call).")
-                render_ticket(DEMO_TICKET)
-            else:
-                with st.spinner(f"Analyzing with {MODEL}..."):
-                    try:
-                        ticket = analyze_logs(logs)
-                        render_ticket(ticket)
-                    except anthropic.APIError as e:
-                        st.error(f"API error: {e}")
-                    except Exception as e:
-                        st.error(f"Failed to parse response: {e}")
+            with st.spinner("Analyzing logs…"):
+                try:
+                    ticket = analyze_logs_via_cli(logs)
+                    render_ticket(ticket)
+                except subprocess.TimeoutExpired:
+                    st.error("Analysis timed out after 180s. Showing canned demo ticket instead.")
+                    render_ticket(DEMO_TICKET)
+                except FileNotFoundError:
+                    st.error("`claude` CLI not found on PATH. Showing canned demo ticket instead.")
+                    render_ticket(DEMO_TICKET)
+                except (json.JSONDecodeError, RuntimeError) as e:
+                    st.error(f"Couldn't parse the response: {e}\n\nShowing canned demo ticket instead.")
+                    render_ticket(DEMO_TICKET)
+                except Exception as e:
+                    st.error(f"Analysis failed: {e}\n\nShowing canned demo ticket instead.")
+                    render_ticket(DEMO_TICKET)
         else:
             st.info("Paste logs on the left and click **Analyze** to generate a ticket.")
 
