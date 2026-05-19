@@ -2,13 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>DB connection pool exhausted in search-api causing widespread fallback responses</title>
+<title>Payment OOM causes Stripe charges without local transaction records</title>
 <style>
   :root {
     --bg: #f4f5f7; --card: #ffffff; --border: #e4e6ea; --border-strong: #c1c7d0;
     --text: #172b4d; --muted: #5e6c84; --code-bg: #f7f8fa;
     --pill-bg: #ebecf0; --pill-text: #42526e;
-    --sev-bg: #fff1e0; --sev-text: #a45200; --sev-border: #f5c98a;
+    --sev-bg: #ffe5e5; --sev-text: #b3261e; --sev-border: #f5a3a3;
   }
   * { box-sizing: border-box; }
   body { margin: 0; padding: 24px 16px; background: var(--bg);
@@ -55,48 +55,46 @@
   <article class="card">
     <header class="header">
       <div class="title-block">
-        <div class="key">Ticket &middot; search-api</div>
-        <h1>DB connection pool exhausted in search-api causing widespread fallback responses</h1>
+        <div class="key">Ticket &middot; payments</div>
+        <h1>Payment OOM causes Stripe charges without local transaction records</h1>
       </div>
-      <span class="severity-badge">P1</span>
+      <span class="severity-badge">P0</span>
     </header>
 
     <dl class="meta">
       <dt>Component</dt>
-      <dd><span class="pill">search-api</span></dd>
+      <dd><span class="pill">payments</span></dd>
       <dt>Assignee</dt>
-      <dd><span class="pill">search-team</span></dd>
+      <dd><span class="pill">payments-team</span></dd>
       <dt>Labels</dt>
       <dd>
-        <span class="pill">database</span>
-        <span class="pill">connection-pool</span>
-        <span class="pill">hikaricp</span>
-        <span class="pill">search-api</span>
-        <span class="pill">degraded-service</span>
-        <span class="pill">stale-cache</span>
+        <span class="pill">payments</span>
+        <span class="pill">oom</span>
+        <span class="pill">data-integrity</span>
+        <span class="pill">stripe</span>
+        <span class="pill">reconciliation</span>
+        <span class="pill">incident</span>
       </dd>
     </dl>
 
     <h2>Description</h2>
-    <p>The `search-api` service is experiencing connection pool exhaustion against its database. HikariCP is throwing `PoolInitializationException: Connection timeout after 10000ms` after waiting the full 10s for a free connection.</p>
-    <p>Pool state at time of incident: `active=20 idle=0 waiting=14` — the pool is fully saturated with 14 additional requests queued. In the last 5 minutes, 234 connection-timeout errors have occurred, and the service is serving stale (6h old) cached fallback results to users.</p>
-    <p>While the fallback prevents user-facing 5xx errors (requests still return 200), search results are stale and degraded. Root cause is likely one of: (1) a slow/long-running query holding connections, (2) traffic spike exceeding pool capacity, (3) a connection leak in `ProductRepository.findByQuery`, or (4) downstream database performance degradation.</p>
-    <p>First stack frame: `com.acme.search.repo.ProductRepository.findByQuery(ProductRepository.java:67)` called from `SearchService.search(SearchService.java:42)`.</p>
+    <p>Payment service threw `java.lang.OutOfMemoryError: Java heap space` in `PaymentBatch.aggregate` while handling a charge request (req_id=7f3a9b). The transaction was NOT committed locally, but the user was already charged on Stripe, leaving the system in an inconsistent state requiring manual reconciliation.</p>
+    <p>This is a data integrity / financial correctness issue: any user hitting this OOM path will be charged externally without a corresponding local record. At least one user (u_4421) is currently affected and flagged for manual reconciliation.</p>
+    <p>Root cause appears to be unbounded memory growth in `PaymentBatch.aggregate` (PaymentBatch.java:142). Additionally, the charge flow is not atomic with respect to Stripe — the external charge succeeds before the local transaction is committed, so any failure after the Stripe call (OOM, crash, etc.) produces orphaned charges.</p>
 
     <h2>Steps to Reproduce</h2>
     <ol>
-      <li>User u_8821 issued GET /api/search?q=running+shoes (req_id=a1b2c3) at 2026-05-19T09:14:22Z.</li>
-      <li>Request acquired a DB connection from the Hikari pool (12/20 in use at that moment).</li>
-      <li>10 seconds later, the connection attempt for the query timed out with HikariPool PoolInitializationException.</li>
-      <li>Pool state immediately after: active=20, idle=0, waiting=14 — fully saturated.</li>
-      <li>Service fell back to stale cached results (6h old) and returned HTTP 200.</li>
-      <li>Over the following 5 minutes, 234 similar connection timeouts and fallback responses were observed.</li>
+      <li>At 2026-05-19T14:32:12.445Z, request req_id=7f3a9b entered PaymentController.charge (PaymentController.java:54).</li>
+      <li>PaymentService.handleCharge (PaymentService.java:88) invoked PaymentBatch.aggregate (PaymentBatch.java:142).</li>
+      <li>PaymentBatch.aggregate exhausted the JVM heap and threw java.lang.OutOfMemoryError.</li>
+      <li>Local transaction commit failed; however the Stripe charge for user u_4421 had already succeeded.</li>
+      <li>Result: user u_4421 charged on Stripe with no corresponding local transaction record — flagged for manual reconciliation.</li>
     </ol>
 
     <h2>Error Signature</h2>
     <div class="error-block">
       <button class="copy-btn" onclick="navigator.clipboard.writeText(this.nextElementSibling.innerText); this.textContent='copied'; setTimeout(()=>this.textContent='copy', 1200);">copy</button>
-      <span class="mono">com.zaxxer.hikari.pool.HikariPool$PoolInitializationException: Connection timeout after 10000ms</span>
+      <span class="mono">java.lang.OutOfMemoryError: Java heap space at com.acme.payments.processor.PaymentBatch.aggregate(PaymentBatch.java:142)</span>
     </div>
 
     <div class="footer">Generated from logs by Claude</div>

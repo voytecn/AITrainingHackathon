@@ -3,6 +3,7 @@ import json
 import os
 import re
 import subprocess
+from datetime import datetime, timedelta
 from typing import Literal
 
 import anthropic
@@ -282,10 +283,72 @@ DEMO_TICKET = JiraTicket(
 )
 
 
+# Year is optional (some logs use MM-DD only). Sub-second part accepts `.`, `,`, or `:`
+# as separator (covers ISO, Python logging, and some Java/custom formats).
+_TIMESTAMP_RE = re.compile(
+    r"^\s*(?:(\d{4})-)?(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:[.,:](\d+))?(?:Z|[+-]\d{2}:?\d{2})?"
+)
+
+
+def _parse_ts(line: str) -> datetime | None:
+    m = _TIMESTAMP_RE.match(line)
+    if not m:
+        return None
+    year_s, month, day, hour, minute, second, frac = m.groups()
+    year = int(year_s) if year_s else 2000  # placeholder when year is missing
+    frac_us = int(((frac or "") + "000000")[:6])
+    try:
+        return datetime(year, int(month), int(day), int(hour), int(minute), int(second), frac_us)
+    except ValueError:
+        return None
+
+
+def _parse_log_timestamps(text: str) -> list[tuple[str, datetime | None]]:
+    """For each line, return (line, parsed_timestamp_or_None). Untimestamped lines inherit
+    the previous line's timestamp at filter time, so stack traces ride along with their parent."""
+    return [(line, _parse_ts(line)) for line in text.splitlines()]
+
+
+def _filter_logs_by_window(text: str, start: datetime, end: datetime) -> str:
+    """Keep lines whose effective timestamp (own, or inherited from the most recent
+    timestamped line above) falls in [start, end]."""
+    kept: list[str] = []
+    current: datetime | None = None
+    for line, ts in _parse_log_timestamps(text):
+        if ts is not None:
+            current = ts
+        if current is not None and start <= current <= end:
+            kept.append(line)
+    return "\n".join(kept)
+
+
+def _run_analysis(logs: str) -> JiraTicket:
+    try:
+        return analyze_logs_via_cli(logs)
+    except subprocess.TimeoutExpired:
+        st.error("Analysis timed out after 180s. Showing canned demo ticket instead.")
+    except FileNotFoundError:
+        st.error("`claude` CLI not found on PATH. Showing canned demo ticket instead.")
+    except (json.JSONDecodeError, RuntimeError) as e:
+        st.error(f"Couldn't parse the response: {e}\n\nShowing canned demo ticket instead.")
+    except Exception as e:
+        st.error(f"Analysis failed: {e}\n\nShowing canned demo ticket instead.")
+    return DEMO_TICKET
+
+
 def main():
     st.set_page_config(page_title="Logs to Jira", page_icon="🎫", layout="wide")
     st.title("🎫 Logs to Jira")
-    st.caption("Paste application logs → get a structured Jira ticket.")
+    st.caption("Drop a log file, pick a sample, or paste manually → get a structured Jira ticket.")
+
+    if "logs_input" not in st.session_state:
+        st.session_state.logs_input = ""
+    if "current_ticket" not in st.session_state:
+        st.session_state.current_ticket = None
+    if "history" not in st.session_state:
+        st.session_state.history = []  # list[tuple[str, JiraTicket]]
+    if "uploader_key" not in st.session_state:
+        st.session_state.uploader_key = 0
 
     sample_dir = "sample_logs"
     samples = {}
@@ -294,41 +357,108 @@ def main():
             with open(os.path.join(sample_dir, fname), encoding="utf-8") as f:
                 samples[fname] = f.read()
 
+    def _on_file_upload():
+        f = st.session_state.get(f"uploader_{st.session_state.uploader_key}")
+        if f is not None:
+            st.session_state.logs_input = f.read().decode("utf-8", errors="replace")
+
+    def _on_sample_pick():
+        choice = st.session_state.get("sample_choice", "(none)")
+        if choice != "(none)" and choice in samples:
+            st.session_state.logs_input = samples[choice]
+
+    def _on_clear():
+        st.session_state.logs_input = ""
+        st.session_state.uploader_key += 1  # forces st.file_uploader to reset
+
     col_input, col_output = st.columns([1, 1])
 
     with col_input:
         st.subheader("Logs")
+        st.file_uploader(
+            "Drop a log file (or browse)",
+            type=["log", "txt", "out", "json", "err"],
+            key=f"uploader_{st.session_state.uploader_key}",
+            on_change=_on_file_upload,
+        )
         if samples:
-            choice = st.selectbox("Load sample", ["(none)"] + list(samples.keys()))
-            default_text = samples[choice] if choice != "(none)" else ""
-        else:
-            default_text = ""
+            st.selectbox(
+                "Or pick a sample",
+                ["(none)"] + list(samples.keys()),
+                key="sample_choice",
+                on_change=_on_sample_pick,
+            )
+        st.text_area("Or paste here", key="logs_input", height=320)
 
-        logs = st.text_area("Paste logs here", value=default_text, height=400, label_visibility="collapsed")
+        timestamps = [ts for _, ts in _parse_log_timestamps(st.session_state.logs_input) if ts is not None]
+        filtered_logs = st.session_state.logs_input
+        if len(timestamps) >= 2 and min(timestamps) < max(timestamps):
+            ts_min, ts_max = min(timestamps), max(timestamps)
+            stored = st.session_state.get("time_window")
+            if stored is not None and (stored[0] < ts_min or stored[1] > ts_max):
+                del st.session_state["time_window"]
+            range_secs = (ts_max - ts_min).total_seconds()
+            if range_secs < 10:
+                step, fmt = timedelta(milliseconds=100), "HH:mm:ss.SSS"
+            elif range_secs < 600:
+                step, fmt = timedelta(seconds=1), "HH:mm:ss"
+            elif range_secs < 7200:
+                step, fmt = timedelta(seconds=10), "HH:mm:ss"
+            elif range_secs < 86400:
+                step, fmt = timedelta(minutes=1), "HH:mm"
+            else:
+                step, fmt = timedelta(minutes=10), "YYYY-MM-DD HH:mm"
+            window = st.slider(
+                "Time window",
+                min_value=ts_min,
+                max_value=ts_max,
+                value=(ts_min, ts_max),
+                step=step,
+                format=fmt,
+                key="time_window",
+            )
+            filtered_logs = _filter_logs_by_window(st.session_state.logs_input, window[0], window[1])
+            total = len(st.session_state.logs_input.splitlines())
+            kept = len(filtered_logs.splitlines())
+            if (window[0], window[1]) != (ts_min, ts_max):
+                st.caption(f"Analyzing **{kept} of {total}** lines · {window[0].time()} → {window[1].time()}")
+        elif len(timestamps) == 1:
+            st.caption(f"Single timestamp detected ({timestamps[0]}); time filter disabled.")
 
-        analyze = st.button("Analyze →", type="primary", disabled=not logs.strip())
+        btn_analyze, btn_clear = st.columns([3, 1])
+        with btn_analyze:
+            analyze = st.button(
+                "Analyze →",
+                type="primary",
+                use_container_width=True,
+                disabled=not filtered_logs.strip(),
+            )
+        with btn_clear:
+            st.button("Clear", on_click=_on_clear, use_container_width=True)
 
     with col_output:
         st.subheader("Generated Ticket")
+
         if analyze:
             with st.spinner("Analyzing logs…"):
-                try:
-                    ticket = analyze_logs_via_cli(logs)
-                    render_ticket(ticket)
-                except subprocess.TimeoutExpired:
-                    st.error("Analysis timed out after 180s. Showing canned demo ticket instead.")
-                    render_ticket(DEMO_TICKET)
-                except FileNotFoundError:
-                    st.error("`claude` CLI not found on PATH. Showing canned demo ticket instead.")
-                    render_ticket(DEMO_TICKET)
-                except (json.JSONDecodeError, RuntimeError) as e:
-                    st.error(f"Couldn't parse the response: {e}\n\nShowing canned demo ticket instead.")
-                    render_ticket(DEMO_TICKET)
-                except Exception as e:
-                    st.error(f"Analysis failed: {e}\n\nShowing canned demo ticket instead.")
-                    render_ticket(DEMO_TICKET)
+                ticket = _run_analysis(filtered_logs)
+            st.session_state.current_ticket = ticket
+            st.session_state.history.insert(0, (datetime.now().strftime("%H:%M:%S"), ticket))
+            st.session_state.history = st.session_state.history[:5]
+
+        if st.session_state.current_ticket is not None:
+            render_ticket(st.session_state.current_ticket)
         else:
-            st.info("Paste logs on the left and click **Analyze** to generate a ticket.")
+            st.info("Load logs on the left and click **Analyze** to generate a ticket.")
+
+        if st.session_state.history:
+            st.markdown("---")
+            st.caption("Recent")
+            for i, (ts, t) in enumerate(st.session_state.history):
+                label = f"{ts} · {t.severity} · {t.title[:60]}"
+                if st.button(label, key=f"hist_{i}", use_container_width=True):
+                    st.session_state.current_ticket = t
+                    st.rerun()
 
 
 if __name__ == "__main__":
