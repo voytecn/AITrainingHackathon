@@ -337,8 +337,8 @@ def _run_analysis(logs: str) -> JiraTicket:
 
 
 def main():
-    st.set_page_config(page_title="Logs to Jira", page_icon="🎫", layout="wide")
-    st.title("🎫 Logs to Jira")
+    st.set_page_config(page_title="Logs Analyser to Jira", page_icon="🎫", layout="wide")
+    st.title("🎫 Logs Analyser to Jira")
     st.caption("Drop a log file, pick a sample, or paste manually → get a structured Jira ticket.")
 
     if "logs_input" not in st.session_state:
@@ -440,6 +440,7 @@ def main():
 
     with col_output:
         st.subheader("Generated Ticket")
+        st.markdown("<div style='height: 30px'></div>", unsafe_allow_html=True)
 
         if analyze:
             with st.spinner("Analyzing logs…"):
