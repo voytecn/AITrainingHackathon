@@ -4,7 +4,7 @@ import os
 import re
 import subprocess
 from datetime import datetime, timedelta
-from typing import Literal
+from typing import Literal, Optional
 
 import anthropic
 import streamlit as st
@@ -41,7 +41,7 @@ class JiraTicket(BaseModel):
     component: str = Field(description="System component or service affected")
     description: str = Field(description="Markdown summary of what's broken and why it matters")
     repro_steps: list[str] = Field(description="Ordered steps to reproduce, reconstructed from logs")
-    suggested_assignee: str | None = Field(description="Team or person guess, or null")
+    suggested_assignee: Optional[str] = Field(description="Team or person guess, or null")
     labels: list[str] = Field(description="3-6 tags like 'bug', 'production', 'payments', 'memory-leak'")
     error_signature: str = Field(description="The single most diagnostic error line for dedup")
 
@@ -166,16 +166,37 @@ def create_jira_ticket_via_mcp(ticket: JiraTicket, project_key: str) -> dict:
         return {"ok": False, "key": None, "url": None, "error": f"couldn't parse CLI response: {result.stdout[:500]}"}
 
 
-SEVERITY_PALETTE = {
-    "P0": {"bg": "#ffe5e5", "text": "#b3261e", "border": "#f5a3a3"},
-    "P1": {"bg": "#fff1e0", "text": "#a45200", "border": "#f5c98a"},
-    "P2": {"bg": "#e5f1ff", "text": "#1b4d8a", "border": "#a3c4f3"},
-    "P3": {"bg": "#ececec", "text": "#444444", "border": "#c9c9c9"},
+BRAND = {
+    "purple_900": "#38003D",
+    "purple_800": "#5F016F",
+    "pink_500":   "#FF33BB",
+    "pink_300":   "#FF80D4",
+    "pink_200":   "#FFADE4",
+    "pink_100":   "#FFE5F7",
+    "off_white":  "#F9F5F4",
+    "white":      "#FFFFFF",
+    "text":       "#201E1D",
+    "muted":      "#716C6A",
+    "border":     "#E3DFDD",
+    "border_2":   "#C3BDBC",
 }
+
+SEVERITY_CSS = f"""
+  .severity-badge.sev-p0 {{ background: {BRAND['purple_800']}; color: {BRAND['white']}; border-color: {BRAND['purple_900']}; }}
+  .severity-badge.sev-p1 {{ background: {BRAND['pink_500']};   color: {BRAND['white']}; border-color: {BRAND['pink_500']}; }}
+  .severity-badge.sev-p2 {{ background: {BRAND['pink_200']};   color: {BRAND['purple_800']}; border-color: {BRAND['pink_300']}; }}
+  .severity-badge.sev-p3 {{ background: {BRAND['border']};     color: #545050; border-color: {BRAND['border_2']}; }}
+  @media (prefers-color-scheme: dark) {{
+    .severity-badge.sev-p0 {{ background: {BRAND['pink_500']}; color: {BRAND['white']}; border-color: {BRAND['pink_500']}; }}
+    .severity-badge.sev-p1 {{ background: {BRAND['pink_300']}; color: #2A0231; border-color: {BRAND['pink_300']}; }}
+    .severity-badge.sev-p2 {{ background: {BRAND['purple_800']}; color: {BRAND['pink_200']}; border-color: {BRAND['purple_900']}; }}
+    .severity-badge.sev-p3 {{ background: #383433; color: #C3BDBC; border-color: #545050; }}
+  }}
+"""
 
 
 def ticket_to_html(ticket: JiraTicket) -> str:
-    pal = SEVERITY_PALETTE.get(ticket.severity, SEVERITY_PALETTE["P3"])
+    sev_class = f"sev-{ticket.severity.lower()}"
 
     labels_html = "\n        ".join(
         f'<span class="pill">{html.escape(l)}</span>' for l in ticket.labels
@@ -193,52 +214,79 @@ def ticket_to_html(ticket: JiraTicket) -> str:
 <head>
 <meta charset="utf-8" />
 <title>{html.escape(ticket.title)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root {{
-    --bg: #f4f5f7; --card: #ffffff; --border: #e4e6ea; --border-strong: #c1c7d0;
-    --text: #172b4d; --muted: #5e6c84; --code-bg: #f7f8fa;
-    --pill-bg: #ebecf0; --pill-text: #42526e;
-    --sev-bg: {pal["bg"]}; --sev-text: {pal["text"]}; --sev-border: {pal["border"]};
+    --bg: {BRAND["off_white"]}; --card: {BRAND["white"]};
+    --border: {BRAND["border"]}; --border-strong: {BRAND["border_2"]};
+    --text: {BRAND["text"]}; --muted: {BRAND["muted"]};
+    --accent: {BRAND["purple_800"]}; --accent-strong: {BRAND["purple_900"]};
+    --pill-bg: {BRAND["off_white"]}; --pill-text: {BRAND["purple_800"]};
+    --error-bg: {BRAND["pink_100"]}; --error-text: {BRAND["purple_800"]};
+    --btn-bg: {BRAND["white"]};
+    --card-shadow: 0 1px 2px rgba(32, 30, 29, 0.04);
   }}
+  @media (prefers-color-scheme: dark) {{
+    :root {{
+      --bg: #1A1818; --card: #262322;
+      --border: #383433; --border-strong: #545050;
+      --text: {BRAND["off_white"]}; --muted: #A6A1A0;
+      --accent: {BRAND["pink_300"]}; --accent-strong: {BRAND["pink_200"]};
+      --pill-bg: #2E2A29; --pill-text: {BRAND["pink_300"]};
+      --error-bg: #2E0834; --error-text: {BRAND["pink_200"]};
+      --btn-bg: #2E2A29;
+      --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    }}
+  }}
+{SEVERITY_CSS}
   * {{ box-sizing: border-box; }}
-  body {{ margin: 0; padding: 24px 16px; background: var(--bg);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-    color: var(--text); line-height: 1.5; }}
-  .card {{ max-width: 820px; margin: 0 auto; background: var(--card);
-    border: 1px solid var(--border); border-radius: 8px;
-    box-shadow: 0 1px 2px rgba(9, 30, 66, 0.05); padding: 28px 32px 24px; }}
+  body {{ margin: 0; padding: 32px 16px; background: var(--bg);
+    font-family: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    color: var(--text); line-height: 1.55; -webkit-font-smoothing: antialiased; }}
+  .card {{ max-width: 860px; margin: 0 auto; background: var(--card);
+    border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: var(--card-shadow); padding: 32px 36px 28px; }}
   .header {{ display: flex; align-items: flex-start; justify-content: space-between;
-    gap: 16px; margin-bottom: 18px; }}
-  .title-block .key {{ font-size: 12px; color: var(--muted); font-weight: 600;
-    letter-spacing: 0.04em; text-transform: uppercase; margin-bottom: 6px; }}
-  h1 {{ margin: 0; font-size: 22px; font-weight: 600; line-height: 1.3; }}
-  .severity-badge {{ flex-shrink: 0; padding: 5px 12px; border-radius: 999px;
-    font-size: 12px; font-weight: 700; letter-spacing: 0.05em;
-    background: var(--sev-bg); color: var(--sev-text); border: 1px solid var(--sev-border); }}
-  .meta {{ display: grid; grid-template-columns: 120px 1fr; row-gap: 10px;
-    column-gap: 16px; padding: 16px 0; border-top: 1px solid var(--border);
-    border-bottom: 1px solid var(--border); margin-bottom: 22px; font-size: 14px; }}
-  .meta dt {{ color: var(--muted); font-weight: 500; }}
+    gap: 20px; margin-bottom: 22px; }}
+  .title-block .key {{ font-size: 11px; color: var(--muted); font-weight: 600;
+    letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 8px; }}
+  h1 {{ margin: 0; font-size: 24px; font-weight: 600; line-height: 1.25;
+    letter-spacing: -0.01em; color: var(--text); }}
+  .severity-badge {{ flex-shrink: 0; padding: 6px 14px; border-radius: 999px;
+    font-size: 12px; font-weight: 700; letter-spacing: 0.08em;
+    border: 1px solid transparent; }}
+  .meta {{ display: grid; grid-template-columns: 110px 1fr; row-gap: 12px;
+    column-gap: 18px; padding: 18px 0; border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border); margin-bottom: 24px; font-size: 14px; }}
+  .meta dt {{ color: var(--muted); font-weight: 500; font-size: 13px; }}
   .meta dd {{ margin: 0; color: var(--text); }}
-  .pill {{ display: inline-block; padding: 2px 10px; margin: 2px 4px 2px 0;
-    background: var(--pill-bg); color: var(--pill-text); border-radius: 3px;
-    font-size: 12px; font-weight: 500; }}
-  h2 {{ font-size: 14px; font-weight: 600; text-transform: uppercase;
-    letter-spacing: 0.05em; color: var(--muted); margin: 22px 0 10px; }}
-  p, ol {{ margin: 0 0 12px; font-size: 15px; }}
+  .pill {{ display: inline-block; padding: 3px 11px; margin: 2px 5px 2px 0;
+    background: var(--pill-bg); color: var(--pill-text); border-radius: 999px;
+    border: 1px solid var(--border); font-size: 12px; font-weight: 500;
+    letter-spacing: 0.01em; }}
+  h2 {{ font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.1em; color: var(--accent); margin: 24px 0 12px;
+    font-family: "DM Sans", sans-serif; }}
+  p, ol {{ margin: 0 0 12px; font-size: 15px; color: var(--text); }}
   ol {{ padding-left: 22px; }}
-  ol li {{ margin-bottom: 6px; }}
-  code, .mono {{ font-family: "SFMono-Regular", Consolas, Menlo, monospace; font-size: 13px; }}
-  .error-block {{ position: relative; background: var(--code-bg);
-    border: 1px solid var(--border); border-radius: 4px;
-    padding: 12px 56px 12px 14px; color: #c00f0c;
+  ol li {{ margin-bottom: 8px; }}
+  code, .mono {{ font-family: "DM Mono", "SFMono-Regular", Consolas, Menlo, monospace;
+    font-size: 13px; }}
+  .error-block {{ position: relative; background: var(--error-bg);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px 64px 14px 16px; color: var(--error-text);
     white-space: pre-wrap; word-break: break-all; }}
-  .copy-btn {{ position: absolute; top: 8px; right: 8px; background: transparent;
-    border: 1px solid var(--border-strong); border-radius: 3px; padding: 4px 8px;
-    cursor: pointer; color: var(--muted); font-size: 11px; line-height: 1; }}
-  .copy-btn:hover {{ background: #fff; color: var(--text); }}
-  .footer {{ margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--border);
-    font-size: 12px; color: var(--muted); text-align: right; }}
+  .copy-btn {{ position: absolute; top: 10px; right: 10px; background: var(--btn-bg);
+    border: 1px solid var(--border-strong); border-radius: 6px; padding: 5px 10px;
+    cursor: pointer; color: var(--accent); font-size: 11px; line-height: 1;
+    font-family: "DM Sans", sans-serif; font-weight: 600; letter-spacing: 0.04em;
+    text-transform: uppercase; transition: all 0.15s ease; }}
+  .copy-btn:hover {{ background: var(--accent); color: var(--card); border-color: var(--accent); }}
+  .footer {{ margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--muted); text-align: right;
+    letter-spacing: 0.04em; text-transform: uppercase; font-weight: 500; }}
 </style>
 </head>
 <body>
@@ -248,7 +296,7 @@ def ticket_to_html(ticket: JiraTicket) -> str:
         <div class="key">Ticket &middot; {html.escape(ticket.component)}</div>
         <h1>{html.escape(ticket.title)}</h1>
       </div>
-      <span class="severity-badge">{html.escape(ticket.severity)}</span>
+      <span class="severity-badge {sev_class}">{html.escape(ticket.severity)}</span>
     </header>
 
     <dl class="meta">
@@ -276,7 +324,7 @@ def ticket_to_html(ticket: JiraTicket) -> str:
       <span class="mono">{html.escape(ticket.error_signature)}</span>
     </div>
 
-    <div class="footer">Generated from logs by Claude</div>
+    <div class="footer">Generated by Arrive &middot; Logs to Jira</div>
   </article>
 </body>
 </html>"""
@@ -387,9 +435,152 @@ def _run_analysis(logs: str) -> JiraTicket:
     return DEMO_TICKET
 
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+LOGO_PATH = os.path.join(HERE, "arrive_logo.png")
+SYMBOL_PATH = os.path.join(HERE, "arrive_symbol.png")
+
+
+def inject_brand_css():
+    st.markdown(
+        f"""
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+        <style>
+          :root {{
+            --a-bg: {BRAND["off_white"]};
+            --a-surface: {BRAND["white"]};
+            --a-text: {BRAND["text"]};
+            --a-muted: {BRAND["muted"]};
+            --a-border: {BRAND["border"]};
+            --a-border-strong: {BRAND["border_2"]};
+            --a-accent: {BRAND["purple_800"]};
+            --a-accent-hover: {BRAND["purple_900"]};
+            --a-accent-soft: {BRAND["pink_100"]};
+            --a-on-accent: {BRAND["white"]};
+            --a-logo-filter: none;
+          }}
+          @media (prefers-color-scheme: dark) {{
+            :root {{
+              --a-bg: #1A1818;
+              --a-surface: #262322;
+              --a-text: {BRAND["off_white"]};
+              --a-muted: #A6A1A0;
+              --a-border: #383433;
+              --a-border-strong: #545050;
+              --a-accent: {BRAND["pink_300"]};
+              --a-accent-hover: {BRAND["pink_200"]};
+              --a-accent-soft: #2E0834;
+              --a-on-accent: #2A0231;
+              --a-logo-filter: brightness(0) saturate(100%) invert(78%) sepia(33%) saturate(2089%) hue-rotate(283deg) brightness(102%) contrast(101%);
+            }}
+          }}
+          html, body, [class*="css"] {{
+            font-family: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif !important;
+            color: var(--a-text);
+          }}
+          .stApp {{ background-color: var(--a-bg) !important; }}
+          [data-testid="stHeader"] {{ background: transparent; }}
+          h1, h2, h3, h4 {{ color: var(--a-text) !important; letter-spacing: -0.01em; font-weight: 600; }}
+          .arrive-divider {{
+            height: 1px; background: var(--a-border); margin: 14px 0 26px;
+          }}
+          .arrive-title {{
+            font-size: 13px; font-weight: 600; letter-spacing: 0.14em;
+            color: var(--a-muted); text-transform: uppercase;
+            padding-left: 18px; border-left: 1px solid var(--a-border);
+          }}
+          [data-testid="stImage"] img {{ filter: var(--a-logo-filter); }}
+          .stButton > button {{
+            font-family: "DM Sans", sans-serif !important;
+            font-weight: 600; letter-spacing: 0.02em;
+            border-radius: 8px; padding: 10px 18px;
+            transition: all 0.15s ease;
+          }}
+          .stButton > button[kind="primary"] {{
+            background: var(--a-accent); color: var(--a-on-accent);
+            border: 1px solid var(--a-accent);
+          }}
+          .stButton > button[kind="primary"]:hover:not(:disabled) {{
+            background: var(--a-accent-hover); border-color: var(--a-accent-hover);
+          }}
+          .stButton > button[kind="primary"]:disabled {{
+            background: var(--a-border); color: var(--a-muted);
+            border-color: var(--a-border);
+          }}
+          .stButton > button:not([kind="primary"]) {{
+            background: var(--a-surface); color: var(--a-accent);
+            border: 1px solid var(--a-border-strong);
+          }}
+          .stButton > button:not([kind="primary"]):hover {{
+            border-color: var(--a-accent);
+            background: var(--a-accent-soft);
+          }}
+          [data-testid="stTextArea"] textarea {{
+            font-family: "DM Mono", "SFMono-Regular", Consolas, Menlo, monospace !important;
+            font-size: 13px; background: var(--a-surface) !important;
+            border: 1px solid var(--a-border) !important; border-radius: 8px !important;
+            color: var(--a-text) !important;
+          }}
+          [data-testid="stTextArea"] textarea:focus {{
+            border-color: var(--a-accent) !important;
+            box-shadow: 0 0 0 1px var(--a-accent) !important;
+          }}
+          [data-testid="stSelectbox"] > div > div {{
+            background: var(--a-surface) !important; border: 1px solid var(--a-border) !important;
+            border-radius: 8px !important; color: var(--a-text) !important;
+          }}
+          [data-testid="stFileUploader"] section {{
+            background: var(--a-surface) !important; border: 1px dashed var(--a-border-strong) !important;
+            border-radius: 8px !important;
+          }}
+          [data-testid="stFileUploader"] section:hover {{ border-color: var(--a-accent) !important; }}
+          [data-testid="stFileUploader"] small {{ color: var(--a-muted) !important; }}
+          [data-testid="stSlider"] [data-baseweb="slider"] div[role="slider"] {{
+            background-color: var(--a-accent) !important;
+            border-color: var(--a-accent) !important;
+          }}
+          [data-testid="stSlider"] [data-baseweb="slider"] > div > div > div {{
+            background: var(--a-accent) !important;
+          }}
+          [data-testid="stAlert"] {{
+            border-radius: 8px; border: 1px solid var(--a-border);
+            background: var(--a-surface); color: var(--a-text);
+          }}
+          .panel-label {{
+            font-size: 11px; font-weight: 700; letter-spacing: 0.12em;
+            color: var(--a-accent); text-transform: uppercase;
+            margin-bottom: 10px;
+          }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_header():
+    col_logo, col_title = st.columns([1, 6], gap="small")
+    with col_logo:
+        if os.path.exists(LOGO_PATH):
+            st.image(LOGO_PATH, width=140)
+        else:
+            accent = BRAND["purple_800"]
+            st.markdown(f"<h2 style='color:{accent};margin:0'>Arrive</h2>", unsafe_allow_html=True)
+    with col_title:
+        st.markdown(
+            "<div style='display:flex;align-items:center;height:100%;'>"
+            "<span class='arrive-title'>Logs Analyser &rarr; Jira</span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+    st.markdown("<div class='arrive-divider'></div>", unsafe_allow_html=True)
+
+
 def main():
-    st.set_page_config(page_title="Logs Analyser to Jira", page_icon="🎫", layout="wide")
-    st.title("🎫 Logs Analyser to Jira")
+    icon = SYMBOL_PATH if os.path.exists(SYMBOL_PATH) else None
+    st.set_page_config(page_title="Arrive · Logs Analyser to Jira", page_icon=icon, layout="wide")
+    inject_brand_css()
+    render_header()
     st.caption("Drop a log file, pick a sample, or paste manually → get a structured Jira ticket.")
 
     if "logs_input" not in st.session_state:
@@ -414,10 +605,10 @@ def main():
         st.session_state.pop("_last_uploaded_sig", None)
         st.session_state.pop("_last_sample", None)
 
-    col_input, col_output = st.columns([1, 1])
+    col_input, col_output = st.columns([1, 1], gap="large")
 
     with col_input:
-        st.subheader("Logs")
+        st.markdown("<div class='panel-label'>Logs</div>", unsafe_allow_html=True)
         uploaded = st.file_uploader(
             "Drop a log file (or browse)",
             type=["log", "txt", "out", "json", "err"],
@@ -490,7 +681,7 @@ def main():
             st.button("Clear", on_click=_on_clear, use_container_width=True)
 
     with col_output:
-        st.subheader("Generated Ticket")
+        st.markdown("<div class='panel-label'>Generated Ticket</div>", unsafe_allow_html=True)
         st.markdown("<div style='height: 30px'></div>", unsafe_allow_html=True)
 
         if analyze:
