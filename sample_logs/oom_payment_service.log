@@ -1,0 +1,12 @@
+2026-05-19T14:32:11.234Z INFO  [payment-service] req_id=7f3a9b processing payment user_id=u_4421 amount=129.99 currency=USD
+2026-05-19T14:32:11.891Z INFO  [payment-service] req_id=7f3a9b calling stripe-gateway
+2026-05-19T14:32:12.102Z WARN  [payment-service] req_id=7f3a9b heap usage 87% (3.5GB / 4GB)
+2026-05-19T14:32:12.445Z ERROR [payment-service] req_id=7f3a9b java.lang.OutOfMemoryError: Java heap space
+    at com.acme.payments.processor.PaymentBatch.aggregate(PaymentBatch.java:142)
+    at com.acme.payments.processor.PaymentService.handleCharge(PaymentService.java:88)
+    at com.acme.payments.api.PaymentController.charge(PaymentController.java:54)
+    at sun.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+2026-05-19T14:32:12.501Z ERROR [payment-service] req_id=7f3a9b failed to process payment, transaction NOT committed
+2026-05-19T14:32:12.502Z ERROR [payment-service] req_id=7f3a9b user u_4421 charged on stripe but local txn missing - MANUAL RECONCILIATION REQUIRED
+2026-05-19T14:32:13.001Z INFO  [payment-service] req_id=7f3a9b 500 response sent to client
+2026-05-19T14:32:15.222Z WARN  [payment-service] same OOM pattern seen in last 30 min: 47 occurrences

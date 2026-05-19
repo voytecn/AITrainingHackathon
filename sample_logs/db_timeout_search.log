@@ -1,0 +1,9 @@
+2026-05-19T09:14:22.001Z INFO  [search-api] req_id=a1b2c3 GET /api/search?q=running+shoes user_id=u_8821
+2026-05-19T09:14:22.105Z DEBUG [search-api] req_id=a1b2c3 acquired db connection from pool (12/20 in use)
+2026-05-19T09:14:32.108Z ERROR [search-api] req_id=a1b2c3 com.zaxxer.hikari.pool.HikariPool$PoolInitializationException: Connection timeout after 10000ms
+    at com.acme.search.repo.ProductRepository.findByQuery(ProductRepository.java:67)
+    at com.acme.search.service.SearchService.search(SearchService.java:42)
+2026-05-19T09:14:32.109Z WARN  [search-api] connection pool state: active=20 idle=0 waiting=14
+2026-05-19T09:14:32.211Z INFO  [search-api] req_id=a1b2c3 returning cached fallback results (stale, 6h old)
+2026-05-19T09:14:32.300Z INFO  [search-api] req_id=a1b2c3 200 response sent
+2026-05-19T09:14:35.001Z WARN  [search-api] last 5 min: 234 connection-timeout errors, 234 fallback responses served
