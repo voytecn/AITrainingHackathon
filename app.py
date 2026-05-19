@@ -115,6 +115,57 @@ def analyze_logs_via_cli(logs: str) -> JiraTicket:
     return JiraTicket.model_validate(data)
 
 
+SEVERITY_TO_JIRA_PRIORITY = {"P0": "Highest", "P1": "High", "P2": "Medium", "P3": "Low"}
+
+
+def create_jira_ticket_via_mcp(ticket: JiraTicket, project_key: str) -> dict:
+    """Use Claude CLI + Atlassian MCP to create a Jira issue. Returns {ok, key, url, error}."""
+    payload = {
+        "project_key": project_key,
+        "summary": ticket.title,
+        "description": ticket.description,
+        "priority": SEVERITY_TO_JIRA_PRIORITY.get(ticket.severity),
+        "labels": ticket.labels,
+        "issuetype": "Bug",
+    }
+    prompt = (
+        "Use the Atlassian MCP tools to create a Jira issue with this data:\n\n"
+        f"```json\n{json.dumps(payload, indent=2)}\n```\n\n"
+        "Steps:\n"
+        "1. If needed, fetch the accessible Atlassian cloud id first.\n"
+        f"2. Create the issue in project '{project_key}'. Use issuetype 'Bug' (fall back to 'Task' if Bug is unavailable).\n"
+        "3. After creation, respond with ONLY a single JSON object (no markdown fences, no prose) with these exact fields:\n"
+        "  - ok: boolean\n"
+        "  - key: string (issue key like 'HACK-123') or null\n"
+        "  - url: string (browse URL) or null\n"
+        "  - error: string or null\n"
+    )
+    cli_env = {k: v for k, v in os.environ.items() if k not in {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}}
+    try:
+        result = subprocess.run(
+            ["claude", "-p", "--permission-mode", "bypassPermissions"],
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            encoding="utf-8",
+            env=cli_env,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "key": None, "url": None, "error": "claude CLI timed out after 180s"}
+    except FileNotFoundError:
+        return {"ok": False, "key": None, "url": None, "error": "`claude` CLI not found on PATH"}
+    if result.returncode != 0:
+        return {"ok": False, "key": None, "url": None, "error": f"CLI exited {result.returncode}: {result.stderr.strip() or 'no stderr'}"}
+    raw = _extract_json(result.stdout)
+    if not raw:
+        return {"ok": False, "key": None, "url": None, "error": f"empty CLI output. stderr: {result.stderr.strip()}"}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {"ok": False, "key": None, "url": None, "error": f"couldn't parse CLI response: {result.stdout[:500]}"}
+
+
 SEVERITY_PALETTE = {
     "P0": {"bg": "#ffe5e5", "text": "#b3261e", "border": "#f5a3a3"},
     "P1": {"bg": "#fff1e0", "text": "#a45200", "border": "#f5c98a"},
@@ -447,9 +498,37 @@ def main():
             st.session_state.current_ticket = ticket
             st.session_state.history.insert(0, (datetime.now().strftime("%H:%M:%S"), ticket))
             st.session_state.history = st.session_state.history[:5]
+            st.session_state.pop("jira_result", None)
 
         if st.session_state.current_ticket is not None:
             render_ticket(st.session_state.current_ticket)
+
+            st.markdown("### Push to Jira")
+            project_key = st.text_input(
+                "Jira project key",
+                value=st.session_state.get("jira_project_key", ""),
+                placeholder="HACK",
+                help="Project key to file the issue under, e.g. HACK or DEMO.",
+                key="jira_project_key_input",
+            ).strip()
+            if st.button("Create Jira ticket", type="primary", disabled=not project_key, key="create_jira"):
+                st.session_state["jira_project_key"] = project_key
+                with st.spinner(f"Creating issue in {project_key} via Atlassian MCP…"):
+                    st.session_state["jira_result"] = create_jira_ticket_via_mcp(
+                        st.session_state.current_ticket, project_key
+                    )
+
+            jira_result = st.session_state.get("jira_result")
+            if jira_result:
+                if jira_result.get("ok") and jira_result.get("key"):
+                    key = jira_result["key"]
+                    url = jira_result.get("url")
+                    if url:
+                        st.success(f"Created [{key}]({url})")
+                    else:
+                        st.success(f"Created {key}")
+                else:
+                    st.error(f"Failed to create issue: {jira_result.get('error') or 'unknown error'}")
         else:
             st.info("Load logs on the left and click **Analyze** to generate a ticket.")
 
@@ -460,6 +539,7 @@ def main():
                 label = f"{ts} · {t.severity} · {t.title[:60]}"
                 if st.button(label, key=f"hist_{i}", use_container_width=True):
                     st.session_state.current_ticket = t
+                    st.session_state.pop("jira_result", None)
                     st.rerun()
 
 
