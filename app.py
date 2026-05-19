@@ -357,37 +357,39 @@ def main():
             with open(os.path.join(sample_dir, fname), encoding="utf-8") as f:
                 samples[fname] = f.read()
 
-    def _on_file_upload():
-        f = st.session_state.get(f"uploader_{st.session_state.uploader_key}")
-        if f is not None:
-            st.session_state.logs_input = f.read().decode("utf-8", errors="replace")
-
-    def _on_sample_pick():
-        choice = st.session_state.get("sample_choice", "(none)")
-        if choice != "(none)" and choice in samples:
-            st.session_state.logs_input = samples[choice]
-
     def _on_clear():
         st.session_state.logs_input = ""
         st.session_state.uploader_key += 1  # forces st.file_uploader to reset
+        st.session_state.pop("_last_uploaded_sig", None)
+        st.session_state.pop("_last_sample", None)
 
     col_input, col_output = st.columns([1, 1])
 
     with col_input:
         st.subheader("Logs")
-        st.file_uploader(
+        uploaded = st.file_uploader(
             "Drop a log file (or browse)",
             type=["log", "txt", "out", "json", "err"],
             key=f"uploader_{st.session_state.uploader_key}",
-            on_change=_on_file_upload,
         )
+        if uploaded is not None:
+            sig = (uploaded.name, uploaded.size)
+            if st.session_state.get("_last_uploaded_sig") != sig:
+                st.session_state._last_uploaded_sig = sig
+                st.session_state.logs_input = uploaded.getvalue().decode("utf-8", errors="replace")
+                st.rerun()
+
         if samples:
-            st.selectbox(
+            choice = st.selectbox(
                 "Or pick a sample",
                 ["(none)"] + list(samples.keys()),
                 key="sample_choice",
-                on_change=_on_sample_pick,
             )
+            if choice != "(none)" and st.session_state.get("_last_sample") != choice:
+                st.session_state._last_sample = choice
+                st.session_state.logs_input = samples[choice]
+                st.rerun()
+
         st.text_area("Or paste here", key="logs_input", height=320)
 
         timestamps = [ts for _, ts in _parse_log_timestamps(st.session_state.logs_input) if ts is not None]

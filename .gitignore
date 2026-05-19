@@ -21,3 +21,10 @@ env/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Real/private log fixtures — never commit raw production logs
+sample_logs/REAL*
+sample_logs/*.private.*
+
+# Generated tickets (rewritten on every render; may contain sensitive content)
+ticket.html
