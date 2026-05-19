@@ -389,7 +389,7 @@ _TIMESTAMP_RE = re.compile(
 )
 
 
-def _parse_ts(line: str) -> datetime | None:
+def _parse_ts(line: str) -> Optional[datetime]:
     m = _TIMESTAMP_RE.match(line)
     if not m:
         return None
@@ -402,7 +402,7 @@ def _parse_ts(line: str) -> datetime | None:
         return None
 
 
-def _parse_log_timestamps(text: str) -> list[tuple[str, datetime | None]]:
+def _parse_log_timestamps(text: str) -> list[tuple[str, Optional[datetime]]]:
     """For each line, return (line, parsed_timestamp_or_None). Untimestamped lines inherit
     the previous line's timestamp at filter time, so stack traces ride along with their parent."""
     return [(line, _parse_ts(line)) for line in text.splitlines()]
@@ -412,7 +412,7 @@ def _filter_logs_by_window(text: str, start: datetime, end: datetime) -> str:
     """Keep lines whose effective timestamp (own, or inherited from the most recent
     timestamped line above) falls in [start, end]."""
     kept: list[str] = []
-    current: datetime | None = None
+    current: Optional[datetime] = None
     for line, ts in _parse_log_timestamps(text):
         if ts is not None:
             current = ts
